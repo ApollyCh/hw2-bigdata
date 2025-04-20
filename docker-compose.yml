@@ -18,24 +18,24 @@ services:
     hostname: cluster-master
     tty: true
     working_dir: /app
+    # You can comment the entrypoint to run the script manually inside the container
+    entrypoint:
+      - bash
+      - /app/app.sh
     environment:
       - SPARK_DRIVER_MEMORY=4g
       - SPARK_EXECUTOR_MEMORY=4g
-    # You can comment the entrypoint to run the script manually inside the container
-    entrypoint: 
-      - bash
-      - /app/app.sh
-    
+
   cluster-slave-1:
     image: firasj/spark-docker-cluster
     container_name: cluster-slave-1
     networks:
       - spark-cluster
     hostname: cluster-slave-1
+    tty: true
     environment:
       - SPARK_DRIVER_MEMORY=4g
       - SPARK_EXECUTOR_MEMORY=4g
-    tty: true
   # cluster-slave-2:
   #   image: firasj/spark-docker-cluster
   #   container_name: cluster-slave-2
@@ -53,7 +53,6 @@ services:
       - "9042:9042"
     networks:
       - spark-cluster
-    
 
 networks:
   spark-cluster:

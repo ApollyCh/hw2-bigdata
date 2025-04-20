@@ -1,24 +1,38 @@
 #!/usr/bin/env python3
-
-import sys
 import re
+import sys
+from collections import defaultdict
 
-for l in sys.stdin:
-    l = l.strip()
-    if not l:
+STOPWORDS = {
+    "is", "are", "was", "were", "be", "been", "being",
+    "am", "it", "this", "that", "these", "those",
+    "he", "she", "they", "we", "you", "your", "our",
+    "have", "has", "had", "do", "does", "did",
+    "will", "would", "shall", "may", "might", "can", "could",
+    "as", "what", "which", "who", "whom", "how", "where", "when",
+    "again", "more", "most", "very", "too", "just", "not"
+}
+
+def tokenize(text):
+    return [t for t in re.findall(r'\b\w+\b', text.lower()) if t not in STOPWORDS]
+
+for line in sys.stdin:
+    parts = line.strip().split("\t", 2)
+    if len(parts) != 3:
         continue
 
-    p = l.split("\t", 2)
-    if len(p) < 3:
-        continue
+    doc_id_str, raw_title, raw_text = parts
+    doc_id = int(doc_id_str)
+    title = raw_title.replace("_", " ")
+    full_text = f"{title} {raw_text}"
+    tokens = tokenize(full_text)
 
-    i = int(p[0])
-    t = f"{p[1]} {p[2]}"
-    toks = [w for w in re.split(r"\W+", t.lower()) if w]
+    term_counts = defaultdict(int)
+    for tok in tokens:
+        term_counts[tok] += 1
 
-    for tok in toks:
-        print(f"{tok}\t{i}\t1")
+    print(f"__META__\t{doc_id}\t{title}")
+    print(f"__DOCLEN__\t{doc_id}\t{len(tokens)}")
 
-    print(f"@@TIT\t{i}\t{p[1]}")
-    print(f"@@LEN\t{i}\t{len(toks)}")
-    print(f"@@ID\t{i}\t1")
+    for term, tf in term_counts.items():
+        print(f"{term}\t{doc_id}\t{tf}")

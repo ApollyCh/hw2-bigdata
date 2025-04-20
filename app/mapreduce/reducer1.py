@@ -1,86 +1,86 @@
 #!/usr/bin/env python3
+import sys
+import math
+from collections import defaultdict
 
-import sys, math
-sys.path.insert(0, "cassandra_lib.zip")
+sys.path.insert(0, "cassandra_driver.zip")
 
 from cassandra.cluster import Cluster
 from cassandra.query import BatchStatement, ConsistencyLevel
 
-c = Cluster(["cassandra-server"])
-s = c.connect("search_index")
+BATCH_SIZE = 75
 
-t_i = {}
-d_l = {}
-t = {}
-d_set = set()
+cluster = Cluster(["cassandra-server"])
+session = cluster.connect("search_index")
 
-for l in sys.stdin:
-    l = l.strip()
-    if not l:
-        continue
-    p = l.split("\t", 2)
-    if len(p) < 3:
-        continue
+stmt_docs = session.prepare("INSERT INTO documents (doc_id, title, doc_length) VALUES (?, ?, ?)")
+stmt_index = session.prepare("INSERT INTO inverted_index (term, doc_id, tf) VALUES (?, ?, ?)")
+stmt_vocab = session.prepare("INSERT INTO vocabulary (term, df, idf) VALUES (?, ?, ?)")
+stmt_stats = session.prepare("INSERT INTO stats (key, value) VALUES (?, ?)")
 
-    k, d, v = p
-    try:
-        d = int(d)
-    except:
+term_index = defaultdict(dict)
+doc_lengths = {}
+doc_titles = {}
+doc_ids = set()
+
+for line in sys.stdin:
+    parts = line.strip().split("\t", 2)
+    if len(parts) != 3:
         continue
 
-    if k == "@@TIT":
-        t[d] = v
-    elif k == "@@LEN":
-        d_l[d] = int(v)
-    elif k == "@@ID":
-        d_set.add(d)
+    key, doc_id_str, val = parts
+    doc_id = int(doc_id_str)
+
+    if key == "__META__":
+        doc_titles[doc_id] = val
+    elif key == "__DOCLEN__":
+        doc_lengths[doc_id] = int(val)
+        doc_ids.add(doc_id)
     else:
-        tf = int(v)
-        if k not in t_i:
-            t_i[k] = {}
-        t_i[k][d] = t_i[k].get(d, 0) + tf
+        tf = int(val)
+        term_index[key][doc_id] = tf
 
-n = len(d_set)
-avg = sum(d_l.get(x, 0) for x in d_set) / n if n else 0.0
+total_docs = len(doc_ids)
+avgdl = sum(doc_lengths.values()) / total_docs if total_docs else 0.0
 
-s.execute("INSERT INTO stats (key, value) VALUES (%s, %s)", ("totalDocs", float(n)))
-s.execute("INSERT INTO stats (key, value) VALUES (%s, %s)", ("avgDocLength", float(avg)))
+session.execute(stmt_stats, ("N", float(total_docs)))
+session.execute(stmt_stats, ("avgdl", float(avgdl)))
 
-stmt_doc = s.prepare("INSERT INTO documents (doc_id, doc_length, title) VALUES (?, ?, ?)")
-b = BatchStatement(consistency_level=ConsistencyLevel.ONE)
-for i, d in enumerate(d_set, 1):
-    b.add(stmt_doc, (d, d_l.get(d, 0), t.get(d, "")))
-    if i % 150 == 0:
-        s.execute(b)
-        b.clear()
-if b:
-    s.execute(b)
+# Вставка: документы
+batch = BatchStatement(consistency_level=ConsistencyLevel.ONE)
+for i, doc_id in enumerate(doc_ids, 1):
+    batch.add(stmt_docs, (doc_id, doc_titles.get(doc_id, ""), doc_lengths.get(doc_id, 0)))
+    if i % BATCH_SIZE == 0:
+        session.execute(batch)
+        batch.clear()
+if batch:
+    session.execute(batch)
 
-stmt_vocab = s.prepare("INSERT INTO vocabulary (term, df, idf) VALUES (?, ?, ?)")
-stmt_idx = s.prepare("INSERT INTO inverted_index (term, doc_id, tf) VALUES (?, ?, ?)")
+# vocabulary + inverted_index
+batch_vocab = BatchStatement(consistency_level=ConsistencyLevel.ONE)
+batch_index = BatchStatement(consistency_level=ConsistencyLevel.ONE)
+count_vocab = count_index = 0
 
-bv = BatchStatement(consistency_level=ConsistencyLevel.ONE)
-bi = BatchStatement(consistency_level=ConsistencyLevel.ONE)
-vc = ic = 0
+for term, doc_map in term_index.items():
+    df = len(doc_map)
+    idf = math.log((total_docs + 1.0) / (df + 1.0))
 
-for term, docs in t_i.items():
-    df = len(docs)
-    idf = math.log((n + 1.0) / (df + 1.0)) if df else 0.0
+    batch_vocab.add(stmt_vocab, (term, df, idf))
+    count_vocab += 1
+    if count_vocab % BATCH_SIZE == 0:
+        session.execute(batch_vocab)
+        batch_vocab.clear()
 
-    bv.add(stmt_vocab, (term, df, idf))
-    vc += 1
-    if vc % 75 == 0:
-        s.execute(bv)
-        bv.clear()
+    for doc_id, tf in doc_map.items():
+        batch_index.add(stmt_index, (term, doc_id, tf))
+        count_index += 1
+        if count_index % BATCH_SIZE == 0:
+            session.execute(batch_index)
+            batch_index.clear()
 
-    for doc_id, tf in docs.items():
-        bi.add(stmt_idx, (term, doc_id, tf))
-        ic += 1
-        if ic % 75 == 0:
-            s.execute(bi)
-            bi.clear()
+if batch_vocab:
+    session.execute(batch_vocab)
+if batch_index:
+    session.execute(batch_index)
 
-if bv:
-    s.execute(bv)
-if bi:
-    s.execute(bi)
+print("✅ Indexing complete.")

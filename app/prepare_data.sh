@@ -2,10 +2,8 @@
 
 source .venv/bin/activate
 
-
 # Python of the driver (/app/.venv/bin/python)
-export PYSPARK_DRIVER_PYTHON=$(which python) 
-
+export PYSPARK_DRIVER_PYTHON=$(which python)
 
 unset PYSPARK_PYTHON
 
@@ -16,10 +14,10 @@ unset PYSPARK_PYTHON
     unzip a.parquet.zip &&
     rm a.parquet.zip
 
-hdfs dfs -put -f a.parquet / && \
-    spark-submit prepare_data.py && \
-    echo "Putting data to hdfs" && \
-    hdfs dfs -put data / && \
-    hdfs dfs -ls /data && \
-    hdfs dfs -ls /index/data && \
+hdfs dfs -put -f a.parquet / &&
+    spark-submit prepare_data.py &&
+    echo "Putting data to hdfs" &&
+    hdfs dfs -put data / &&
+    hdfs dfs -ls /data &&
+    hdfs dfs -ls /index/data &&
     echo "done data preparation!"

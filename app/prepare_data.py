@@ -1,27 +1,49 @@
+import os
+import re
+
 from pathvalidate import sanitize_filename
-from tqdm import tqdm
 from pyspark.sql import SparkSession
+from tqdm import tqdm
 
 
-spark = SparkSession.builder \
-    .appName('data preparation') \
-    .master("local") \
-    .config("spark.sql.parquet.enableVectorizedReader", "true") \
+def clean_text(text):
+    if text is None:
+        return ""
+    text = re.sub(r"\[\[.*?\|", "", text)
+    text = re.sub(r"\[\[|\]\]", "", text)
+    text = re.sub(r"<.*?>", "", text)
+    text = re.sub(r"\{\{.*?\}\}", "", text)
+    text = re.sub(r"\[.*?\]", "", text)
+    text = re.sub(r"''+", "", text)
+    text = re.sub(r"[\n\r\t]+", " ", text)
+    return text.strip()
+
+
+spark = (
+    SparkSession.builder.appName("data preparation")
+    .master("local")
+    .config("spark.sql.parquet.enableVectorizedReader", "true")
     .getOrCreate()
-
+)
 
 df = spark.read.parquet("/a.parquet")
+df = df.select(["id", "title", "text"])
+
 n = 1000
-df = df.select(['id', 'title', 'text']).sample(fraction=100 * n / df.count(), seed=0).limit(n)
+sampled_df = df.sample(fraction=100 * n / df.count(), seed=42).limit(n)
 
+os.makedirs("data", exist_ok=True)
+sampled_list = sampled_df.collect()
 
-def create_doc(row):
-    filename = "data/" + sanitize_filename(str(row['id']) + "_" + row['title']).replace(" ", "_") + ".txt"
-    with open(filename, "w") as f:
-        f.write(row['text'])
+for row in tqdm(sampled_list, desc="Creating documents"):
+    doc_id = str(row["id"])
+    filename = f"{doc_id}_{sanitize_filename(row['title']).replace(' ', '_')}.txt"
+    text = clean_text(row["text"])
 
+    if text:
+        with open(os.path.join("data", filename), "w", encoding="utf-8") as f:
+            f.write(text)
 
-df.foreach(create_doc)
-
-
-df.write.csv("/index/data", sep = "\t")
+sampled_df.rdd.map(
+    lambda row: f"{row['id']}\t{sanitize_filename(row['title'])}\t{row['text']}"
+).saveAsTextFile("/index/data")
